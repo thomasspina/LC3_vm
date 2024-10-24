@@ -59,6 +59,7 @@ uint16_t reg[R_COUNT];
 
 /* HELPER */
 
+// puts everything on 16 bits and keeps the sign
 uint16_t sign_extend(uint16_t x, int bit_count) {
 
     if ((x >> (bit_count - 1)) & 1) {
@@ -68,6 +69,7 @@ uint16_t sign_extend(uint16_t x, int bit_count) {
     return x;
 }
 
+// update condition flag to show last updated register's sign
 void update_flags(uint16_t r) {
     if (reg[r] == 0) {
         reg[R_COND] = FL_ZRO;
@@ -82,6 +84,15 @@ void update_flags(uint16_t r) {
 
 
 /* OPERATIONS */
+
+void branch(uint16_t instr) {
+    uint16_t pc_offset = sign_extend(instr & 0x1ff, 9);
+    uint16_t cond_flag = (instr >> 9) & 0x7;
+
+    if (cond_flag & reg[R_COND]) {
+        reg[R_PC] += pc_offset;
+    }
+}
 
 void add(uint16_t instr) {
     uint16_t dr = (instr >> 9) & 0x7;
@@ -106,14 +117,24 @@ void load(uint16_t instr) {
     update_flags(dr);
 }
 
-void jump_register(uint16_t instr) {
-    
-}
-
 void store(uint16_t instr) {
     uint16_t sr = (instr >> 9) & 0x7;
     uint16_t pc_offset = sign_extend(instr & 0x1ff, 9);
     mem_write(reg[R_PC] + pc_offset, reg[sr]);
+}
+
+void jump_register(uint16_t instr) {
+    uint16_t long_bit = (instr >> 11) & 0x1;
+
+    reg[R_R7] = reg[R_PC];
+
+    if (long_bit) {
+        uint16_t pc_offset = sign_extend(instr & 0x7ff, 11);
+        reg[R_PC] += pc_offset; // JSR
+    } else {
+        uint16_t base_r = (instr >> 6) & 0x7;
+        reg[R_PC] = reg[base_r]; // JSRR
+    }
 }
 
 void bitwise_and(uint16_t instr) {
@@ -132,6 +153,32 @@ void bitwise_and(uint16_t instr) {
     update_flags(dr);
 }
 
+void load_register(uint16_t instr) {
+    uint16_t dr = (instr >> 9) & 0x7;
+    uint16_t base_r = (instr >> 6) & 0x7;
+    uint16_t offset = sign_extend(instr & 0x3f, 6);
+
+    reg[dr] = mem_read(reg[base_r] + offset);
+    update_flags(dr);
+}
+
+void store_register(uint16_t instr) {
+    uint16_t sr = (instr >> 9) & 0x7;
+    uint16_t base_r = (instr >> 6) & 0x7;
+    uint16_t offset = sign_extend(instr & 0x3f, 6);
+
+    mem_write(reg[base_r] + offset, reg[sr]);
+}
+
+void bitwise_not(uint16_t instr) {
+    uint16_t dr = (instr >> 9) & 0x7;
+    uint16_t sr = (instr >> 6) & 0x7;
+
+    reg[dr] = ~reg[sr];
+
+    update_flags(dr);
+}
+
 void load_indirect(uint16_t instr) {
     uint16_t dr = (instr >> 9) & 0x7;
     uint16_t pc_offset = sign_extend(instr & 0x1ff, 9);
@@ -139,7 +186,25 @@ void load_indirect(uint16_t instr) {
     update_flags(dr);
 }
 
+void store_indirect(uint16_t instr) {
+    uint16_t sr = (instr >> 9) & 0x7;
+    uint16_t pc_offset = sign_extend(instr & 0x1ff, 9);
 
+    mem_write(mem_read(reg[R_PC] + pc_offset), reg[sr]);
+}
+
+void jump(uint16_t instr) {
+    uint16_t base_r = (instr >> 6) & 0x7; // RET handled as well
+    reg[R_PC] = base_r;
+}
+
+void load_effective_address(uint16_t instr) {
+    uint16_t dr = (instr >> 9) & 0x7;
+    uint16_t pc_offset = sign_extend(instr & 0x1ff, 9);
+
+    reg[dr] = reg[R_PC] + pc_offset;
+    update_flags(dr);
+}
 
 /* MAIN */
 
@@ -176,12 +241,16 @@ int main(int argc, const char* argv[]) {
                 bitwise_and(instr);
                 break;
             case OP_NOT:
+                bitwise_not(instr);
                 break;
             case OP_BR:
+                branch(instr);
                 break;
             case OP_JMP:
+                jump(instr);
                 break;
             case OP_JSR:
+                jump_register(instr);
                 break;
             case OP_LD:
                 load(instr);
@@ -190,15 +259,19 @@ int main(int argc, const char* argv[]) {
                 load_indirect(instr);
                 break;
             case OP_LDR:
+                load_register(instr);
                 break;
             case OP_LEA:
+                load_effective_address(instr);
                 break;
             case OP_ST:
                 store(instr);
                 break;
             case OP_STI:
+                store_indirect(instr);
                 break;
             case OP_STR:
+                store_register(instr);
                 break;
             case OP_TRAP:
                 break;
